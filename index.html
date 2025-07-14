@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>俄羅斯方塊 (Tetris Web版)</title>
+  <style>
+    body {
+      background: #27467a;
+      font-family: 'Noto Sans TC', Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    #container {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      margin-top: 20px;
+    }
+    #board {
+      background: #111;
+      border: 4px solid #6fc3ff;
+      box-sizing: border-box;
+      border-radius: 16px;
+      box-shadow: 0 0 16px #111a;
+      margin-right: 32px;
+      display: block;
+    }
+    #sidebar {
+      background: #181e28;
+      padding: 24px;
+      border-radius: 18px;
+      box-shadow: 0 0 18px #000a;
+      color: #d7ecff;
+      min-width: 260px;
+      font-size: 1.1em;
+    }
+    #sidebar div, #sidebar p {
+      margin-bottom: 14px;
+    }
+    #next-block {
+      width: 80px; height: 80px;
+      margin: 0 auto 20px auto;
+      background: #000;
+      border: 1px solid #6fc3ff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #sidebar button {
+      font-size: 1em;
+      margin: 6px 8px 6px 0;
+      border-radius: 20px;
+      border: none;
+      padding: 8px 24px;
+      cursor: pointer;
+      background: #4e9bfa;
+      color: #fff;
+      transition: 0.2s;
+    }
+    #sidebar button:active, #sidebar button.selected {
+      background: #fcb64b;
+      color: #222;
+    }
+    #help {
+      font-size: 0.95em;
+      color: #b0cfff;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <canvas id="board" width="240" height="480"></canvas>
+    <div id="sidebar">
+      <div>分數: <span id="score">0</span></div>
+      <div>等級: <span id="level">1</span></div>
+      <div>消除行數: <span id="lines">0</span></div>
+      <div>最高分: <span id="hiscore">0</span></div>
+      <div style="color:#59afff;font-weight:bold;margin-bottom:0;">下一個方塊</div>
+      <div id="next-block"></div>
+      <button id="startBtn">開始遊戲</button>
+      <button id="pauseBtn">暫停</button>
+      <button id="restartBtn">重新開始</button>
+      <div id="help">
+        操作說明：<br>
+        ← → 移動<br>
+        ↑ 旋轉<br>
+        ↓ 快速下落<br>
+        空白鍵 瞬間下落<br>
+        P 暫停
+      </div>
+    </div>
+  </div>
+  <script>
+    // ---- 基本設定 ----
+    const COLS = 10, ROWS = 20;
+    const BLOCK = 24; // 每格像素
+    const COLORS = [
+      '',          // 空
+      '#ff7700',   // L
+      '#ffe600',   // O
+      '#0cbcff',   // I
+      '#33ff58',   // S
+      '#ff66aa',   // Z
+      '#4e9bfa',   // J
+      '#e84dff'    // T
+    ];
+    // 方塊形狀
+    const SHAPES = [
+      [], // 無
+      [[0,0],[0,1],[0,2],[1,2]], // L
+      [[0,0],[1,0],[0,1],[1,1]], // O
+      [[0,0],[0,1],[0,2],[0,3]], // I
+      [[1,0],[2,0],[0,1],[1,1]], // S
+      [[0,0],[1,0],[1,1],[2,1]], // Z
+      [[1,0],[1,1],[1,2],[0,2]], // J
+      [[1,0],[0,1],[1,1],[2,1]]  // T
+    ];
+
+    let board = Array.from({length: ROWS}, () => Array(COLS).fill(0));
+    let current, next, pos, score = 0, level = 1, lines = 0, hiscore = 0;
+    let gameOver = false, paused = false, interval = null;
+
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    const nextCanvas = document.createElement('canvas');
+    nextCanvas.width = nextCanvas.height = BLOCK * 4;
+    document.getElementById('next-block').appendChild(nextCanvas);
+    const nctx = nextCanvas.getContext('2d');
+
+    function randomShape() {
+      let id = 1 + Math.floor(Math.random()*7);
+      return {id, shape: SHAPES[id]};
+    }
+    function resetBoard() {
+      board = Array.from({length: ROWS}, () => Array(COLS).fill(0));
+    }
+    function drawBoard() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // 畫背景格線
+      ctx.strokeStyle = "#222";
+      for(let i=0; i<=COLS; ++i)
+        for(let j=0; j<=ROWS; ++j) {
+          ctx.strokeRect(i*BLOCK, j*BLOCK, BLOCK, BLOCK);
+        }
+      // 畫已固定方塊
+      for(let r=0; r<ROWS; ++r)
+        for(let c=0; c<COLS; ++c)
+          if(board[r][c])
+            drawBlock(c, r, board[r][c]);
+      // 畫當前方塊
+      if(current) drawTetromino(current, pos.x, pos.y);
+    }
+    function drawBlock(x, y, id) {
+      ctx.fillStyle = COLORS[id];
+      ctx.fillRect(x*BLOCK, y*BLOCK, BLOCK-1, BLOCK-1);
+      ctx.strokeStyle = "#000";
+      ctx.strokeRect(x*BLOCK, y*BLOCK, BLOCK-1, BLOCK-1);
+    }
+    function drawTetromino(t, px, py) {
+      t.shape.forEach(([dx,dy]) => {
+        let x = px+dx, y = py+dy;
+        if(y >= 0)
+          drawBlock(x, y, t.id);
+      });
+    }
+    function drawNext() {
+      nctx.clearRect(0,0,nextCanvas.width,nextCanvas.height);
+      next.shape.forEach(([dx,dy]) => {
+        nctx.fillStyle = COLORS[next.id];
+        nctx.fillRect((dx+1)*BLOCK, (dy+1)*BLOCK, BLOCK-1, BLOCK-1);
+        nctx.strokeStyle = "#000";
+        nctx.strokeRect((dx+1)*BLOCK, (dy+1)*BLOCK, BLOCK-1, BLOCK-1);
+      });
+    }
+    function canMove(newShape, x, y) {
+      return newShape.every(([dx,dy]) => {
+        let nx = x+dx, ny = y+dy;
+        return nx >=0 && nx < COLS && ny < ROWS && (ny < 0 || !board[ny][nx]);
+      });
+    }
+    function rotate(shape) {
+      // 旋轉: (x, y) -> (-y, x)
+      return shape.map(([dx,dy]) => [-dy, dx]);
+    }
+    function fixTetromino() {
+      current.shape.forEach(([dx,dy]) => {
+        let x = pos.x+dx, y = pos.y+dy;
+        if(y>=0) board[y][x] = current.id;
+      });
+    }
+    function removeLines() {
+      let newBoard = [], removed = 0;
+      for(let r=0; r<ROWS; ++r) {
+        if(board[r].every(cell => cell)) {
+          ++removed;
+        } else {
+          newBoard.push(board[r]);
+        }
+      }
+      while(newBoard.length < ROWS) newBoard.unshift(Array(COLS).fill(0));
+      board = newBoard;
+      return removed;
+    }
+    function newTetromino() {
+      current = next;
+      next = randomShape();
+      pos = {x: 3, y: -2};
+      if(!canMove(current.shape, pos.x, pos.y)) {
+        gameOver = true;
+        clearInterval(interval);
+        alert("遊戲結束！");
+        if(score > hiscore) {
+          hiscore = score;
+          localStorage.setItem("tetris_hiscore", hiscore);
+        }
+      }
+    }
+    function gameTick() {
+      if(gameOver || paused) return;
+      if(canMove(current.shape, pos.x, pos.y+1)) {
+        pos.y += 1;
+      } else {
+        fixTetromino();
+        let r = removeLines();
+        if(r) {
+          lines += r;
+          score += [0,40,100,300,1200][r] * level;
+          level = 1 + Math.floor(lines/10);
+          document.getElementById('score').textContent = score;
+          document.getElementById('level').textContent = level;
+          document.getElementById('lines').textContent = lines;
+          document.getElementById('hiscore').textContent = hiscore;
+        }
+        newTetromino();
+      }
+      drawBoard();
+      drawNext();
+    }
+    function startGame() {
+      resetBoard();
+      score = lines = 0; level = 1; gameOver = false; paused = false;
+      document.getElementById('score').textContent = score;
+      document.getElementById('level').textContent = level;
+      document.getElementById('lines').textContent = lines;
+      document.getElementById('hiscore').textContent = hiscore;
+      next = randomShape(); newTetromino();
+      drawBoard(); drawNext();
+      clearInterval(interval);
+      interval = setInterval(gameTick, 500 - (level-1)*35);
+    }
+    function pauseGame() {
+      paused = !paused;
+      document.getElementById('pauseBtn').classList.toggle('selected', paused);
+    }
+    function restartGame() {
+      clearInterval(interval);
+      hiscore = +localStorage.getItem("tetris_hiscore") || 0;
+      startGame();
+    }
+
+    // 操作控制
+    document.getElementById('startBtn').onclick = startGame;
+    document.getElementById('pauseBtn').onclick = pauseGame;
+    document.getElementById('restartBtn').onclick = restartGame;
+
+    document.addEventListener('keydown', function(e) {
+      if(gameOver || !current) return;
+      if(paused && e.key !== 'p' && e.key !== 'P') return;
+      let moved = false;
+      if(e.key === 'ArrowLeft') {
+        if(canMove(current.shape, pos.x-1, pos.y)) { pos.x--; moved=true; }
+      }
+      else if(e.key === 'ArrowRight') {
+        if(canMove(current.shape, pos.x+1, pos.y)) { pos.x++; moved=true; }
+      }
+      else if(e.key === 'ArrowUp') {
+        let nextShape = rotate(current.shape);
+        if(canMove(nextShape, pos.x, pos.y)) { current.shape = nextShape; moved=true; }
+      }
+      else if(e.key === 'ArrowDown') {
+        if(canMove(current.shape, pos.x, pos.y+1)) { pos.y++; moved=true; }
+      }
+      else if(e.key === ' ') { // space瞬間到底
+        while(canMove(current.shape, pos.x, pos.y+1)) pos.y++;
+        moved=true;
+      }
+      else if(e.key === 'p' || e.key === 'P') {
+        pauseGame();
+        return;
+      }
+      if(moved) {
+        drawBoard();
+        drawNext();
+      }
+    });
+
+    // 載入最高分
+    window.onload = function() {
+      hiscore = +localStorage.getItem("tetris_hiscore") || 0;
+      document.getElementById('hiscore').textContent = hiscore;
+      drawBoard();
+      drawNext();
+    };
+  </script>
+</body>
+</html>
